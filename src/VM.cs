@@ -1,95 +1,95 @@
-using System.Text;
-
-internal enum ReturnCode
-{
-	None,
-	Halt,
-	Hang,
-}
 internal class VM
 {	
-	internal VM(ushort registerValue)
-	{
-		_registerValue = registerValue;
+	internal VM(IInputReader inputReader, IOutputWriter outputWriter)
+	{		
+		_inputReader = inputReader;
+		_outputWriter = outputWriter;
 		ParseInstructionsToMemory();
 	}
 
-	private readonly ushort[] _memory = new ushort[ushort.MaxValue];
-	private readonly ushort[] _registers = new ushort[8];
-	private readonly Stack<ushort> _stack = new();
-	private int _pos = 0;
+	internal int PC { get; set; } = 0;
+	internal ushort[] Memory { get; } = new ushort[ushort.MaxValue];
+	internal ushort[] Registers { get; } = new ushort[8];
+	internal Stack<ushort> Stack { get; } = new();
 
-	// TODO: refactor into I/O
-	private readonly StringBuilder _outputRecorder = new();
-	private int _currentInputPos = 0;
-	private string _answers = string.Join('\n', new[]
-	{
-		"doorway",
-		"north",
-		"north",
-		"bridge",
-		"continue",
-		"down",
-		"east",
-		"take empty lantern",
-		"west",
-		"west",
-		"passage",
-		"ladder",
-		"west",
-		"south",
-		"north",
-		"take can",
-		"use can",
-		"use lantern",
-		"west",
-		"ladder",
-		"darkness",
-		"continue",
-		"west",
-		"west",
-		"west",
-		"west",
-		"north",
-		"take red coin",
-		"north",
-		"west",
-		"take blue coin",
-		"up",
-		"take shiny coin",
-		"down",
-		"east",
-		"east",
-		"take concave coin",
-		"down",
-		"take corroded coin",
-		"up",
-		"west",
-		"use blue coin",
-		"use red coin",
-		"use shiny coin",
-		"use concave coin",
-		"use corroded coin",
-		"north",
-		"take teleporter"
-	}) + '\n';
-	private readonly ushort _registerValue;
+	private readonly IInputReader _inputReader;
+	private readonly IOutputWriter _outputWriter;
 
-	internal ReturnCode Run()
+	internal bool IsEnabled { get; set; } = true;
+	internal bool IsTracingEnabled { get; set; }
+
+	internal void Disassemble(int startAddress, int count = 1, bool printState = false)
 	{
-		while (true)
+		for (var i = 0; i < count; i++)
 		{
-			var i = _memory[_pos];
+			var offset = 1;
+			string DecodeValue(int pcOffset)
+			{
+				var v = Memory[startAddress + pcOffset];
+				offset++;
+				return v > 32767 ? $"[{v - 32768}]" : v.ToString();
+			}
+			var decoded = Memory[startAddress] switch
+			{
+				00 => $"halt \t\t",
+				01 => $"set  {DecodeValue(1)} {DecodeValue(2)}\t",
+				02 => $"push {DecodeValue(1)}\t\t",
+				03 => $"pop  {DecodeValue(1)}\t\t",
+				04 => $"eq   {DecodeValue(1)} {DecodeValue(2)} {DecodeValue(3)}",
+				05 => $"gt   {DecodeValue(1)} {DecodeValue(2)} {DecodeValue(3)}",
+				06 => $"jmp  {DecodeValue(1)}\t\t",
+				07 => $"jt   {DecodeValue(1)} {DecodeValue(2)}\t",
+				08 => $"jf   {DecodeValue(1)} {DecodeValue(2)}\t",
+				09 => $"add  {DecodeValue(1)} {DecodeValue(2)} {DecodeValue(3)}",
+				10 => $"mult {DecodeValue(1)} {DecodeValue(2)} {DecodeValue(3)}",
+				11 => $"mod  {DecodeValue(1)} {DecodeValue(2)} {DecodeValue(3)}",
+				12 => $"and  {DecodeValue(1)} {DecodeValue(2)} {DecodeValue(3)}",
+				13 => $"or   {DecodeValue(1)} {DecodeValue(2)} {DecodeValue(3)}",
+				14 => $"not  {DecodeValue(1)} {DecodeValue(2)}\t",
+				15 => $"rmem {DecodeValue(1)} {DecodeValue(2)}\t",
+				16 => $"wmem {DecodeValue(1)} {DecodeValue(2)}\t",
+				17 => $"call {DecodeValue(1)}\t\t",
+				18 => $"ret  \t\t",
+				19 => $"out  {DecodeValue(1)}\t\t",
+				20 => $"in   {DecodeValue(1)}\t\t",
+				21 => $"nop  \t\t",
+				> 21 => "??",
+			};
+			var line = $"{startAddress}: {decoded}\t";
+			if (printState)
+			{
+				line += $"[{Registers[0]}], [{Registers[1]}], .., [{Registers[7]}], stack: {Stack.Count} ({Stack.Peek()})";
+			}
+			Console.WriteLine(line);
+
+			startAddress += offset;
+		}
+	}
+	
+	internal void Trace()
+	{
+		if (IsTracingEnabled)
+		{
+			Disassemble(PC, printState: true);
+		}
+	}
+	internal bool Run()
+	{
+		while (IsEnabled)
+		{
+			Trace();
+
+			var i = Memory[PC];
 			switch (i)
 			{
 				case 0: // halt
-					return ReturnCode.Halt;
+					return true;
 
 				case 1: // set
 					{
 						var a = GetRegister();
 						var b = GetValue();
-						_registers[a] = b;
+						Registers[a] = b;
 						Next();
 						break;
 					}
@@ -97,7 +97,7 @@ internal class VM
 				case 2: // push
 					{
 						var a = GetValue();
-						_stack.Push(a);
+						Stack.Push(a);
 						Next();
 						break;
 					}
@@ -105,7 +105,7 @@ internal class VM
 				case 3: // pop
 					{
 						var a = Next();
-						SetValue(a, _stack.Pop());
+						SetValue(a, Stack.Pop());
 						Next();
 						break;
 					}
@@ -131,7 +131,7 @@ internal class VM
 					}
 
 				case 6: // jmp
-					_pos = GetValue();
+					PC = GetValue();
 					break;
 
 				case 7: // jt
@@ -140,7 +140,7 @@ internal class VM
 						var b = GetValue();
 						if (a != 0)
 						{
-							_pos = b;
+							PC = b;
 						}
 						else
 						{
@@ -155,7 +155,7 @@ internal class VM
 						var b = GetValue();
 						if (a == 0)
 						{
-							_pos = b;
+							PC = b;
 						}
 						else
 						{
@@ -230,7 +230,7 @@ internal class VM
 					{
 						var a = Next();
 						var b = GetValue();
-						SetValue(a, _memory[b]);
+						SetValue(a, Memory[b]);
 						Next();
 						break;
 					}
@@ -239,7 +239,7 @@ internal class VM
 					{
 						var a = GetValue();
 						var b = GetValue();
-						_memory[a] = b;
+						Memory[a] = b;
 						Next();
 						break;
 					}
@@ -247,27 +247,21 @@ internal class VM
 				case 17: // call
 					{
 						var a = GetValue();
-						_stack.Push((ushort)(_pos + 1));
-						_pos = a;
+						Stack.Push((ushort)(PC + 1));
+						PC = a;
 						break;
 					}
 
 				case 18: // ret
 					{
-						_pos = _stack.Pop();
+						PC = Stack.Pop();
 						break;
 					}
 
 				case 19: // out
 					{
 						var c = (char)GetValue();
-						Console.Write(c);
-						
-						_outputRecorder.Append(c);
-						if (_outputRecorder.ToString().EndsWith("A strange, electronic voice"))
-						{
-							return ReturnCode.Hang;
-						}
+						_outputWriter.Write(c);
 						Next();
 						break;
 					}
@@ -275,7 +269,7 @@ internal class VM
 				case 20: // in
 					{
 						var a = Next();
-						SetValue(a, GetNextKey());
+						SetValue(a, _inputReader.GetNextKey());
 						Next();
 						break;
 					}
@@ -288,6 +282,7 @@ internal class VM
 					throw new NotImplementedException($"opcode {i} is not implemented yet.");
 			}
 		}
+		return false;
 	}
 
 	private void ParseInstructionsToMemory()
@@ -296,23 +291,10 @@ internal class VM
 		var pos = 0;
 		for (var i = 0; i < bytes.Length - 1; i += 2)
 		{
-			_memory[pos++] = BitConverter.ToUInt16(bytes, i);
+			Memory[pos++] = BitConverter.ToUInt16(bytes, i);
 		}
 	}
-
-	ushort GetNextKey()
-	{
-		if (_currentInputPos == _answers.Length)
-		{
-			_registers[7] = _registerValue;
-			_currentInputPos = 0;
-			_answers = "use teleporter\n";
-		}
-		return _answers[_currentInputPos++];
-	}
-
-
-	private ushort Next() => _memory[++_pos];
+	private ushort Next() => Memory[++PC];
 
 	private ushort GetRegister()
 	{
@@ -325,7 +307,7 @@ internal class VM
 		var v = Next();
 		if (v > 32767)
 		{
-			v = _registers[v - 32768];
+			v = Registers[v - 32768];
 		}
 		return v;
 	}
@@ -334,11 +316,11 @@ internal class VM
 	{
 		if (to > 32767)
 		{
-			_registers[to - 32768] = v;
+			Registers[to - 32768] = v;
 		}
 		else
 		{
-			_memory[to] = v;
+			Memory[to] = v;
 		}
 	}
 
